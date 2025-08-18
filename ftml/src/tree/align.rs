@@ -28,6 +28,7 @@ pub enum Alignment {
     Right,
     Center,
     Justify,
+    NoAlignment,
 }
 
 impl Alignment {
@@ -37,6 +38,7 @@ impl Alignment {
             Alignment::Right => "right",
             Alignment::Center => "center",
             Alignment::Justify => "justify",
+            Alignment::NoAlignment => "",
         }
     }
 }
@@ -94,6 +96,7 @@ impl TryFrom<&'_ str> for FloatAlignment {
             "=" => (Alignment::Center, false),
             "<" => (Alignment::Left, false),
             ">" => (Alignment::Right, false),
+            "f=" | "F=" => (Alignment::NoAlignment, false),
             "f<" | "F<" => (Alignment::Left, true),
             "f>" | "F>" => (Alignment::Right, true),
             _ => return Err(()),

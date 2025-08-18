@@ -25,7 +25,7 @@ use crate::{tree::{FloatAlignment, ImageSource, LinkLocation, AnchorTarget}, url
 
 pub const BLOCK_IMAGE: BlockRule = BlockRule {
     name: "block-image",
-    accepts_names: &["image", "=image", "<image", ">image", "f<image", "f>image"],
+    accepts_names: &["image", "=image", "<image", ">image", "f=image", "f<image", "f>image"],
     accepts_star: false,
     accepts_score: false,
     accepts_newlines: false,

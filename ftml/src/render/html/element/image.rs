@@ -92,6 +92,7 @@ fn render_image_element(
     };
 
     let align_div_class = match alignment {
+        Some(FloatAlignment{align: Alignment::NoAlignment, float: false}) => "",
         Some(FloatAlignment{align: Alignment::Left, float: true}) => "floatleft",
         Some(FloatAlignment{align: Alignment::Right, float: true}) => "floatright",
         Some(FloatAlignment{align: Alignment::Left, float: false}) => "alignleft",

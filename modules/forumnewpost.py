@@ -3,8 +3,16 @@ from datetime import datetime, timezone
 from modules import ModuleError
 from renderer import RenderContext, single_pass_render
 
+from web.events import EventBase
 from web.controllers import articles, permissions
 from web.models.forum import ForumThread, ForumPost, ForumPostVersion
+
+from ._csrf_protection import csrf_safe_method
+
+
+class OnForumNewPost(EventBase):
+    post: ForumPost
+    source: str
 
 
 def has_content():
@@ -15,6 +23,7 @@ def allow_api():
     return True
 
 
+@csrf_safe_method
 def api_preview(context, params):
     if 'source' not in params:
         raise ModuleError('Исходный код не указан')
@@ -64,5 +73,7 @@ def api_submit(context, params):
 
     thread.updated_at = datetime.now(timezone.utc)
     thread.save()
+
+    OnForumNewPost(post=post, source=source).emit()
 
     return {'url': '/forum/t-%d/%s#post-%d' % (thread.id, articles.normalize_article_name(thread.name), post.id)}

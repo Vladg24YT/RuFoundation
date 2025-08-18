@@ -16,7 +16,7 @@ COPY ftml .
 RUN cargo build --release
 
 # JS stuff
-FROM node:17 as js_build
+FROM node:24-slim AS js_build
 
 RUN mkdir -p /build/static
 
@@ -25,17 +25,13 @@ COPY web/js .
 RUN yarn install
 RUN yarn run build
 
-WORKDIR /build/system/js
-COPY system/js .
-RUN yarn install
-RUN yarn run build
-
 # Python stuff
-FROM python:3.10
+FROM python:3.13.2
 
 WORKDIR /app
 
 COPY requirements.txt .
+
 RUN python -m pip install -r requirements.txt
 RUN python -m pip install gunicorn
 
@@ -50,5 +46,7 @@ USER scpwiki
 
 RUN python manage.py collectstatic
 
+RUN chmod 775 entrypoint.sh
+
 EXPOSE 8000
-CMD ["gunicorn", "scpdev.wsgi", "-w", "32", "-t", "300", "-b", "0.0.0.0:8000", "--preload"]
+ENTRYPOINT [ "./entrypoint.sh" ]

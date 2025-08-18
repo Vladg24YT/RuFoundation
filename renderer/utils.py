@@ -2,9 +2,11 @@ from django.contrib.auth.models import AnonymousUser
 from django.conf import settings
 from django.template import Context, Template
 
-from system.models import User
+from web.models.users import User
+from web.controllers import articles
 
 import threading
+import urllib.parse
 
 
 _templates = dict()
@@ -62,12 +64,32 @@ def render_user_to_html(user: User, avatar=True, hover=True):
                 <a href="/-/users/{{user_id}}-{{username}}"><img class="small" src="{{avatar}}" alt="{{displayname}}"></a>
             {% endif %}
             <a href="/-/users/{{user_id}}-{{username}}">{{displayname}}</a></span>
-        """, # i know it's a crutch
+        """,
         class_add=(' avatarhover' if hover else ''),
         show_avatar=avatar,
         avatar=user_avatar,
         user_id=user.id,
         username=user.username,
+        displayname=displayname
+    )
+
+
+def render_external_user_to_html(username: str, avatar=True, hover=True):
+    displayname = username
+    username = articles.normalize_article_name(username)
+    return render_template_from_string(
+        """
+        <span class="printuser w-user{{class_add}}" data-user-id="{{user_id}}" data-user-name="{{username}}">
+            {% if show_avatar %}
+                <a href="https://www.wikidot.com/user:info/{{username}}" target="_blank"><img class="small" src="{{avatar}}" alt="{{displayname}}"></a>
+            {% endif %}
+            <a href="https://www.wikidot.com/user:info/{{username}}" target="_blank">{{displayname}}</a></span>
+        """,
+        class_add=(' avatarhover' if hover else ''),
+        show_avatar=avatar,
+        avatar=settings.WIKIDOT_AVATAR,
+        user_id=-1,
+        username=username,
         displayname=displayname
     )
 
@@ -107,12 +129,22 @@ def render_user_to_json(user: User, avatar=True):
     }
 
 
-def filter_url(url):
+def validate_url(url):
     url = url.strip()
-    test_url = url.lower()
-    if test_url.startswith('javascript:') or test_url.startswith('data:'):
-        return '#invalid-url'
+    try:
+        r = urllib.parse.urlparse(url)
+        if r.scheme.lower() in ['javascript', 'data']:
+            raise ValueError(repr(url))
+    except:
+        raise ValueError(repr(url))
     return url
+
+
+def filter_url(url):
+    try:
+        return validate_url(url)
+    except ValueError:
+        return '#invalid-url'
 
 
 def get_boolean_param(params: dict, key, default=False):

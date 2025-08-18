@@ -11,14 +11,24 @@
 Note: this is what I tested with, your mileage may differ.
 
 - Windows 10
+- PostrgeSQL 17.2
 - NodeJS v17.3.0
-- Python 3.10.1
+- Python 3.13.2
 - Rust 1.63
+
+## PostgreSQL configuration
+Defaults is:
+- Username: `postgress` (`POSTGRES_USER`)
+- Password: `zaq123` (`POSTGRES_PASSWORD`)
+- DB name: `scpwiki` (`POSTGRES_DB`)
+- DB host: `localhost` (`DB_PG_HOST`)
+- DB port: `5432` (`DB_PG_PORT`)
+
+You can change it with given environment variables.
 
 ## How to launch
 
 - First navigate to `web/js` and execute `yarn install`
-- Then navigate to `system/js` and execute `yarn install`
 - After that, from the root project directory, run:
   - `pip install -r requirements.txt`
   - `python manage.py migrate`
@@ -39,7 +49,7 @@ To start working, the following objects are required:
 You can provision these basic structures by running the following commands:
 
 - `python manage.py createsite -s scp-ru -d localhost:8000 -t "SCP Foundation" -H "Russian branch"`
-- `python manage.py seed -s scp-ru`
+- `python manage.py seed`
 
 ## Running in Docker
 
@@ -62,7 +72,7 @@ To completely delete all data, use:
 To create users, sites and seed inside the database, start the project and afterwards use syntax such as this:
 
 - `docker exec -it scpdev_web python manage.py createsite -s scp-ru -d localhost -t "SCP Foundation" -H "Russian branch"`
-- `docker exec -it scpdev_web seed -s scp-ru`
+- `docker exec -it scpdev_web seed`
 
 To update current app that is running, do:
 

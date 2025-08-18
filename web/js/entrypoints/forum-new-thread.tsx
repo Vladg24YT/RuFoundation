@@ -1,68 +1,45 @@
-import * as React from 'react';
-import { Component } from 'react';
-import {UserData} from '../api/user';
-import ForumPostEditor, {ForumPostPreviewData, ForumPostSubmissionData} from '../forum/forum-post-editor';
-import {createForumThread, ForumNewThreadRequest} from '../api/forum';
-import ForumPostPreview from '../forum/forum-post-preview';
-
+import * as React from 'react'
+import { useState } from 'react'
+import { createForumThread, ForumNewThreadRequest } from '../api/forum'
+import { UserData } from '../api/user'
+import ForumPostEditor, { ForumPostPreviewData, ForumPostSubmissionData } from '../forum/forum-post-editor'
+import ForumPostPreview from '../forum/forum-post-preview'
+import useConstCallback from '../util/const-callback'
 
 interface Props {
-    user: UserData
-    categoryId?: number
-    cancelUrl?: string
+  user: UserData
+  categoryId?: number
+  cancelUrl?: string
 }
 
+const ForumNewThread: React.FC<Props> = ({ user, categoryId, cancelUrl }) => {
+  const [preview, setPreview] = useState<ForumPostPreviewData>()
 
-interface State {
-    preview?: ForumPostPreviewData
-}
+  const onClose = useConstCallback(async () => {
+    window.location.href = cancelUrl || '/forum/start'
+  })
 
-
-class ForumNewThread extends Component<Props, State> {
-    constructor(props) {
-        super(props);
-        this.state = {
-
-        };
+  const onSubmit = useConstCallback(async (input: ForumPostSubmissionData) => {
+    const request: ForumNewThreadRequest = {
+      categoryId,
+      name: input.name,
+      description: input.description,
+      source: input.source,
     }
+    const { url } = await createForumThread(request)
+    window.location.href = url
+  })
 
-    onClose = async () => {
-        const { cancelUrl } = this.props;
-        window.location.href = cancelUrl || '/forum/start';
-    };
+  const onPreview = useConstCallback((input: ForumPostPreviewData) => {
+    setPreview(input)
+  })
 
-    onSubmit = async (input: ForumPostSubmissionData) => {
-        const { categoryId } = this.props;
-        const request: ForumNewThreadRequest = {
-            categoryId,
-            name: input.name,
-            description: input.description,
-            source: input.source
-        };
-        const { url } = await createForumThread(request);
-        window.location.href = url;
-    };
-
-    onPreview = (input: ForumPostPreviewData) => {
-        this.setState({ preview: input })
-    };
-
-    render() {
-        const { user } = this.props;
-        const { preview } = this.state;
-        return (
-            <>
-                { preview && <ForumPostPreview preview={preview} user={user} /> }
-                <ForumPostEditor isThread
-                                 isNew
-                                 onClose={this.onClose}
-                                 onSubmit={this.onSubmit}
-                                 onPreview={this.onPreview}
-                />
-            </>
-        )
-    }
+  return (
+    <>
+      {preview && <ForumPostPreview preview={preview} user={user} />}
+      <ForumPostEditor isThread isNew onClose={onClose} onSubmit={onSubmit} onPreview={onPreview} />
+    </>
+  )
 }
-
 
 export default ForumNewThread

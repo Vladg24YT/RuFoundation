@@ -23,8 +23,8 @@ from scpdev import urls
 from web import threadvars
 from web.models.articles import ArticleVersion, ArticleLogEntry, Article
 from web.models.files import File
-from web.models.sites import get_current_site
-from system.models import User
+from web.models.site import get_current_site
+from web.models.users import User
 from uuid import uuid4
 
 
@@ -149,7 +149,7 @@ def run(base_path):
         total_revisions += len(meta.get('revisions', []))
 
     from_files = '%s/files' % base_path
-    to_files = str(Path(settings.MEDIA_ROOT) / site.slug)
+    to_files = str(Path(settings.MEDIA_ROOT) / 'media')
 
     if os.path.exists(to_files):
         logging.info('Removing old files...')

@@ -42,9 +42,9 @@ mod user;
 mod prelude {
     pub use super::super::attributes::AddedAttributes;
     pub use super::super::context::HtmlContext;
-    pub use super::super::random::Random;
+    
     pub use super::{render_element, render_elements};
-    pub use crate::tree::{Element, SyntaxTree};
+    pub use crate::tree::Element;
 }
 
 use self::collapsible::{render_collapsible, Collapsible};
@@ -173,7 +173,7 @@ pub fn render_element(ctx: &mut HtmlContext, element: &Element) {
         }
         Element::MathInline { latex_source } => render_math_inline(ctx, latex_source),
         Element::EquationReference(name) => render_equation_reference(ctx, name),
-        Element::Html { contents } => render_html(ctx, contents),
+        Element::Html { contents, external } => render_html(ctx, contents, *external),
         Element::Iframe { url, attributes } => render_iframe(ctx, url, attributes),
         Element::Include {
             variables,

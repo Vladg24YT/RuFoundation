@@ -3,12 +3,14 @@ import auto_prefetch
 from django.db import models
 from django.db.models import Func, Value
 from django.db.models.lookups import Exact
+from django.contrib.auth import get_user_model
 
 from .articles import Article
-from .sites import SiteLimitedModel
 
 
-class ForumSection(SiteLimitedModel):
+User = get_user_model()
+
+class ForumSection(auto_prefetch.Model):
     class Meta(auto_prefetch.Model.Meta):
         verbose_name = "Категория форума"
         verbose_name_plural = "Категории форума"
@@ -25,7 +27,7 @@ class ForumSection(SiteLimitedModel):
         return self.name
 
 
-class ForumCategory(SiteLimitedModel):
+class ForumCategory(auto_prefetch.Model):
     class Meta(auto_prefetch.Model.Meta):
         verbose_name = "Раздел форума"
         verbose_name_plural = "Разделы форума"
@@ -33,14 +35,14 @@ class ForumCategory(SiteLimitedModel):
     name = models.TextField(verbose_name="Название")
     description = models.TextField(verbose_name="Описание", blank=True)
     order = models.IntegerField(verbose_name="Порядок сортировки", default=0, blank=True)
-    section = auto_prefetch.ForeignKey(to=ForumSection, on_delete=models.DO_NOTHING, verbose_name="Категория")  # to-do: review later
+    section = auto_prefetch.ForeignKey(ForumSection, on_delete=models.DO_NOTHING, verbose_name="Категория")  # to-do: review later
     is_for_comments = models.BooleanField(verbose_name="Отображать комментарии к статьям в этом разделе", default=False)
 
     def __str__(self):
         return self.name
 
 
-class ForumThread(SiteLimitedModel):
+class ForumThread(auto_prefetch.Model):
     class Meta(auto_prefetch.Model.Meta):
         verbose_name = "Тема форума"
         verbose_name_plural = "Темы форума"
@@ -61,14 +63,14 @@ class ForumThread(SiteLimitedModel):
     description = models.TextField(verbose_name="Описание", blank=True)
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Время создания")
     updated_at = models.DateTimeField(auto_now_add=True, verbose_name="Время изменения")
-    category = auto_prefetch.ForeignKey(to=ForumCategory, on_delete=models.DO_NOTHING, null=True, verbose_name="Раздел (если это тема)")  # to-do: review later
-    article = auto_prefetch.ForeignKey(to=Article, on_delete=models.CASCADE, null=True, verbose_name="Статья (если это комментарии)")
-    author = auto_prefetch.ForeignKey(to=settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, verbose_name="Автор")
+    category = auto_prefetch.ForeignKey(ForumCategory, on_delete=models.DO_NOTHING, null=True, verbose_name="Раздел (если это тема)")  # to-do: review later
+    article = auto_prefetch.ForeignKey(Article, on_delete=models.CASCADE, null=True, verbose_name="Статья (если это комментарии)")
+    author = auto_prefetch.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="Автор")
     is_pinned = models.BooleanField(verbose_name="Пришпилено", default=False)
     is_locked = models.BooleanField(verbose_name="Закрыто", default=False)
 
 
-class ForumPost(SiteLimitedModel):
+class ForumPost(auto_prefetch.Model):
     class Meta(auto_prefetch.Model.Meta):
         verbose_name = "Сообщение форума"
         verbose_name_plural = "Сообщения форума"
@@ -76,17 +78,17 @@ class ForumPost(SiteLimitedModel):
     name = models.TextField(verbose_name="Название", blank=True)
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Время создания")
     updated_at = models.DateTimeField(auto_now_add=True, verbose_name="Время изменения")
-    author = auto_prefetch.ForeignKey(to=settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, verbose_name="Автор")
-    reply_to = auto_prefetch.ForeignKey(to='ForumPost', on_delete=models.SET_NULL, null=True, verbose_name="Ответ на комментарий")
-    thread = auto_prefetch.ForeignKey(to=ForumThread, on_delete=models.CASCADE, verbose_name="Тема")
+    author = auto_prefetch.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="Автор")
+    reply_to = auto_prefetch.ForeignKey('ForumPost', on_delete=models.SET_NULL, null=True, verbose_name="Ответ на комментарий")
+    thread = auto_prefetch.ForeignKey(ForumThread, on_delete=models.CASCADE, verbose_name="Тема")
 
 
-class ForumPostVersion(SiteLimitedModel):
+class ForumPostVersion(auto_prefetch.Model):
     class Meta(auto_prefetch.Model.Meta):
         verbose_name = "Версия сообщения форума"
         verbose_name_plural = "Версии сообщений форума"
 
-    post = auto_prefetch.ForeignKey(to=ForumPost, on_delete=models.CASCADE, verbose_name="Сообщение")
+    post = auto_prefetch.ForeignKey(ForumPost, on_delete=models.CASCADE, verbose_name="Сообщение")
     source = models.TextField(verbose_name="Текст сообщения")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="Время создания")
-    author = auto_prefetch.ForeignKey(to=settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, verbose_name="Автор правки")
+    author = auto_prefetch.ForeignKey(User, on_delete=models.SET_NULL, null=True, verbose_name="Автор правки")

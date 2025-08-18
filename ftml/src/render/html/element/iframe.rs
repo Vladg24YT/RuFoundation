@@ -20,6 +20,7 @@
 
 use super::prelude::*;
 use crate::tree::AttributeMap;
+use md5;
 
 pub fn render_iframe(ctx: &mut HtmlContext, url: &str, attributes: &AttributeMap) {
     info!("Rendering iframe block (url '{url}')");
@@ -33,44 +34,44 @@ pub fn render_iframe(ctx: &mut HtmlContext, url: &str, attributes: &AttributeMap
     ));
 }
 
-pub fn render_html(ctx: &mut HtmlContext, contents: &str) {
+pub fn render_html(ctx: &mut HtmlContext, contents: &str, external: bool) {
     info!("Rendering html block");
 
     let id = ctx.random().generate_html_id();
 
-    let prepended_script = format!(r#"
-    <script>
-    (function(){{
-        let lastHeight = 0;
-        function doFrame() {{
-            const body = document.body;
-            const html = document.documentElement;
-            const height = Math.max(body && body.scrollHeight, body && body.offsetHeight, html.offsetHeight, body && body.getBoundingClientRect().height);
-            window.requestAnimationFrame(doFrame);
-            if (lastHeight !== height) {{
-                parent.postMessage({{type: 'iframe-change-height', payload: {{ height, id: '{id}' }} }}, '*');
-                lastHeight = height;
-            }}
-        }}
-        doFrame();
-    }})();
-    </script>
-    <style>
-      body {{ margin: 0; }}
-    </style>
-    "#);
+    let hash_result = md5::compute(contents);
+    let hash_hex = format!("{:x}", hash_result);
 
-    ctx.html()
-        .iframe()
-        .attr(attr!(
-            "id" => &id,
-            "srcdoc" => &format!("{prepended_script}{contents}"),
-            "sandbox" => "allow-scripts allow-top-navigation allow-popups allow-modals",
-            "allow" => "fullscreen",
-            "allowfullscreen" => "allowfullscreen",
-            "style" => "width: 100%; height: 0",
-            "class" => "w-iframe-autoresize",
-            "frameborder" => "0",
-            "allowtransparency" => "true"
-        ));
+    let prepended_script = ctx.handle().get_html_injected_code(&id);
+
+    if !external {
+        ctx.html()
+            .iframe()
+            .attr(attr!(
+                "id" => &id,
+                "srcdoc" => &format!("{prepended_script}{contents}"),
+                "sandbox" => "allow-scripts allow-top-navigation allow-popups allow-modals",
+                "allow" => "fullscreen",
+                "allowfullscreen" => "allowfullscreen",
+                "style" => "width: 100%; height: 0",
+                "class" => "w-iframe-autoresize",
+                "frameborder" => "0",
+                "allowtransparency" => "true"
+            ));
+    } else {
+        let iframe_src = ctx.handle().get_iframe_link(&hash_hex, &id, ctx.info());
+        ctx.html()
+            .iframe()
+            .attr(attr!(
+                "id" => &id,
+                "src" => &iframe_src,
+                "sandbox" => "allow-scripts allow-top-navigation allow-popups allow-modals allow-same-origin",
+                "allow" => "fullscreen",
+                "allowfullscreen" => "allowfullscreen",
+                "style" => "width: 100%; height: 0",
+                "class" => "w-iframe-autoresize",
+                "frameborder" => "0",
+                "allowtransparency" => "true"
+            ));
+    }
 }

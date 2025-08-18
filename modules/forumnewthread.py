@@ -5,12 +5,16 @@ from renderer import RenderContext, render_template_from_string
 import json
 
 from renderer.utils import render_user_to_json
-from web.controllers import articles, permissions
+from web.controllers import articles, permissions, notifications
 from web.models.forum import ForumCategory, ForumThread, ForumPost, ForumPostVersion
 
 
 def has_content():
     return False
+
+
+def allow_api():
+    return True
 
 
 def render(context: RenderContext, params):
@@ -73,10 +77,6 @@ def render(context: RenderContext, params):
     )
 
 
-def allow_api():
-    return True
-
-
 def api_submit(context, params):
     title = (params.get('name') or '').strip()
     description = (params.get('description') or '').strip()[:1000]
@@ -113,5 +113,7 @@ def api_submit(context, params):
 
     first_post_content = ForumPostVersion(post=first_post, source=source, author=context.user)
     first_post_content.save()
+
+    notifications.subscribe_to_notifications(subscriber=context.user, forum_thread=thread)
 
     return {'url': '/forum/t-%d/%s' % (thread.id, articles.normalize_article_name(title))}

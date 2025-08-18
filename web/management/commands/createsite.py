@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand
 
 from web.models.settings import Settings
-from web.models.sites import Site
+from web.models.site import Site
 
 
 class Command(BaseCommand):
@@ -15,6 +15,11 @@ class Command(BaseCommand):
         parser.add_argument('-H', '--headline', required=True, help='Headline of the website (e.g.: Secure, Contain, Protect)')
 
     def handle(self, *args, **options):
+        if Site.objects.exists():
+            curr_site = Site.objects.get()
+            print(f"Can't create multiple sites. You already have \"{curr_site.title}\" on {curr_site.domain}.")
+            return
+        
         media_domain = options["media_domain"] if options["media_domain"] else options["domain"]
 
         site = Site(

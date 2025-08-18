@@ -5,14 +5,16 @@ from django.db.models import TextField, Value
 from django.db.models.functions import Concat, Lower
 from django.utils.safestring import SafeString
 
+import urllib.parse
+
 import modules
-from system.models import User
+from web.models.users import User
 from web import threadvars
 from web.models.articles import ArticleVersion, Article
-from web.models.sites import get_current_site
-from . import expression
+from web.models.site import get_current_site
+from . import expression, html
 from .parser import RenderContext
-from .utils import render_user_to_html, render_template_from_string
+from .utils import render_user_to_html, render_template_from_string, render_external_user_to_html
 
 from modules.listpages import get_page_vars
 from renderer.templates import apply_template
@@ -42,6 +44,9 @@ def callbacks_with_context(context):
 
         def render_user(self, user: str, avatar: bool) -> str:
             try:
+                if user.lower().startswith('external:'):
+                    user = user[len('external:'):]
+                    return render_external_user_to_html(user, avatar=avatar)
                 if user.lower().startswith('wd:'):
                     user = User.objects.get(type=User.UserType.Wikidot, wikidot_username=user[3:])
                 else:
@@ -66,6 +71,10 @@ def callbacks_with_context(context):
                 "image-context-bad": "Некорректный адрес изображения",
             }
             return messages.get(message_id, '?')
+
+        @staticmethod
+        def get_html_injected_code(html_id: str) -> str:
+            return html.get_html_injected_code(html_id)
 
         def render_include_not_found(self, full_name: str) -> str:
             from web.controllers import articles
@@ -194,7 +203,7 @@ def single_pass_render(source, context=None, mode='article') -> str:
         return SafeString(html.body)
 
 
-def single_pass_render_with_excerpt(source, context=None, mode='article') -> [str, str, Optional[str]]:
+def single_pass_render_with_excerpt(source, context=None, mode='article') -> tuple[str, str, Optional[str]]:
     from ftml import ftml
 
     page_vars = get_page_vars(context.article)
@@ -213,8 +222,33 @@ def single_pass_render_with_excerpt(source, context=None, mode='article') -> [st
     return SafeString(html.body), text, None
 
 
-def single_pass_fetch_backlinks(source, context=None, mode='article') -> tuple[list[str], list[str]]:
+def single_pass_render_text(source, context=None, mode='article') -> str:
+    from ftml import ftml
+
+    page_vars = get_page_vars(context.article)
+    source = apply_template(source, lambda param: get_this_page_params(page_vars, param))
+
+    text = ftml.render_text(source, callbacks_with_context(context), page_info_from_context(context), mode).body
+
+    text = '\n'.join([x.strip() for x in text.split('\n')])
+    text = re.sub(r'\n+', '\n', text)
+
+    return text
+
+
+def single_pass_fetch_backlinks(source, context=None, mode='system') -> tuple[list[str], list[str]]:
     from ftml import ftml
 
     text = ftml.collect_backlinks(source, callbacks_with_context(context), page_info_from_context(context), mode)
     return text.included_pages, text.linked_pages
+
+def single_pass_fetch_code_and_html(source, context=None, mode='system', includes=False) -> tuple[list[str], list[str]]:
+    from ftml import ftml
+
+    with threadvars.context():
+        if not includes:
+            res = ftml.collect_code_and_html(source, callbacks_with_context(context), page_info_from_context(context), mode)
+            return res.code, res.html
+        else:
+            res = ftml.render_text(source, callbacks_with_context(context), page_info_from_context(context), mode)
+            return res.code, res.html

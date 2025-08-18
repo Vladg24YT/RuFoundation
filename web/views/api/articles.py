@@ -4,7 +4,7 @@ from django.http import HttpRequest, HttpResponse
 from shared_data import shared_articles
 from . import APIView, APIError, takes_json
 
-from web.controllers import articles, permissions
+from web.controllers import articles, permissions, notifications
 
 from renderer.utils import render_user_to_json
 from renderer import single_pass_render
@@ -61,6 +61,8 @@ class CreateView(ArticleView):
         if data.get('parent') is not None:
             articles.set_parent(article, articles.normalize_article_name(data['parent']), request.user)
 
+        notifications.subscribe_to_notifications(subscriber=request.user, article=article)
+
         return self.render_json(201, {'status': 'ok'})
 
 
@@ -77,6 +79,7 @@ class FetchOrUpdateView(ArticleView):
         source = articles.get_latest_source(article)
 
         return self.render_json(200, {
+            'uid': article.id,
             'pageId': articles.get_full_name(article),
             'title': article.title,
             'source': source,
@@ -145,6 +148,7 @@ class FetchOrUpdateView(ArticleView):
         if not permissions.check(request.user, "delete", article):
             raise APIError('Недостаточно прав', 403)
 
+        articles.OnDeleteArticle(request.user, article).emit()
         articles.delete_article(article)
 
         return self.render_json(200, {'status': 'ok'})
@@ -196,37 +200,16 @@ class FetchOrRevertLogView(APIView):
 
 
 class FetchVersionView(APIView):
-    @staticmethod
-    def get_version_from_meta(meta):
-        if 'source' in meta:
-            return articles.get_version(meta['source']['version_id'])
-        elif "version_id" in meta:
-            return articles.get_version(meta["version_id"])
-        else:
-            return None
-
     def get(self, request: HttpRequest, full_name: str) -> HttpResponse:
-        entry = articles.get_log_entry(full_name, request.GET.get('revNum'))
-        if not entry:
-            raise APIError('Версии с данным идентификатором не существует', 404)
+        article = articles.get_article(full_name)
+        source = articles.get_source_at_rev_num(article, int(request.GET.get('revNum')))
 
-        version = self.get_version_from_meta(entry.meta)
-        if not version:
-            log_entries = list(articles.get_log_entries(full_name))
-            for old_entry in log_entries[log_entries.index(entry):]:
-                version = self.get_version_from_meta(old_entry.meta)
-                if version:
-                    break
+        if source:
+            context = RenderContext(article, article,
+                                    json.loads(request.GET.get('pathParams', "{}")), self.request.user)
+            rendered = single_pass_render(source, context)
 
-        if version:
-            if version.rendered:
-                rendered = version.rendered
-            else:
-                context = RenderContext(version.article, version.article,
-                                        json.loads(request.GET.get('pathParams', "{}")), self.request.user)
-                rendered = single_pass_render(version.source, context)
-
-            return self.render_json(200, {'source': version.source, "rendered": rendered})
+            return self.render_json(200, {'source': source, "rendered": rendered})
         raise APIError('Версии с данным идентификатором не существует', 404)
 
 

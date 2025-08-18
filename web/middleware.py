@@ -1,10 +1,32 @@
 from django.conf import settings
 from django.db.models import Q
 from django.http import HttpResponseRedirect
-from web.models.sites import Site
+from django.core.exceptions import PermissionDenied
+from django.contrib.auth import get_user_model
+from django.shortcuts import render
+
+from web.models.site import Site
 from web import threadvars
+
+import logging
 import django.middleware.csrf
 import urllib.parse
+
+
+User = get_user_model()
+
+class BotAuthTokenMiddleware(object):
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if "Authorization" in request.headers and request.headers["Authorization"].startswith("Bearer "):
+            try:
+                request.user = User.objects.get(type="bot", api_key=request.headers["Authorization"][7:])
+                setattr(request, 'csrf_processing_done', True)
+            except User.DoesNotExist:
+                pass
+        return self.get_response(request)
 
 
 class FixRawPathMiddleware(object):
@@ -47,13 +69,18 @@ class MediaHostMiddleware(object):
                 raw_host = request.get_host().split(':')[0]
                 possible_sites = Site.objects.filter(Q(domain=raw_host) | Q(media_domain=raw_host))
                 if not possible_sites:
-                    raise RuntimeError('Site for this domain (\'%s\') is not configured' % raw_host)
+                    if Site.objects.exists():
+                        logging.warning('This domain (\'%s\') is not configured' % raw_host)
+                        raise PermissionDenied()
+                    else:
+                        return render(request, 'no_site.html')
 
             site = possible_sites[0]
             threadvars.put('current_site', site)
 
             is_media_host = request.get_host().split(':')[0] == site.media_domain
-            is_media_url = request.path.startswith(settings.MEDIA_URL)
+            media_prefixes = ['local--files', 'local--code', 'local--html', 'local--theme']
+            is_media_url = bool([x for x in media_prefixes if request.path.startswith(f'/{x}/')])
 
             if site.media_domain != site.domain:
                 non_media_host = site.domain
@@ -72,6 +99,15 @@ class MediaHostMiddleware(object):
                 response['X-Frame-Options'] = 'DENY'
 
             return response
+
+
+class UserContextMiddleware(object):
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        threadvars.put('current_user', request.user)
+        return self.get_response(request)
 
 
 class CsrfViewMiddleware(django.middleware.csrf.CsrfViewMiddleware):
@@ -115,10 +151,27 @@ class DropWikidotAuthMiddleware(object):
         self.get_response = get_response
 
     def __call__(self, request):
-        rsp = self.get_response(request)
+        response = self.get_response(request)
         for cookie in request.COOKIES:
             if cookie in ['wikidot_token7', 'wikidot_udsession', 'WIKIDOT_SESSION_ID']:
-                rsp.delete_cookie(cookie, path='/')
+                response.delete_cookie(cookie, path='/')
             if cookie.startswith('WIKIDOT_SESSION_ID_'):
-                rsp.delete_cookie(cookie, path='/')
-        return rsp
+                response.delete_cookie(cookie, path='/')
+        return response
+
+
+class SpyRequestMiddleware(object):
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        with threadvars.context():
+            x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+            if x_forwarded_for:
+                ip = x_forwarded_for.split(',')[0]
+            else:
+                ip = request.META.get('REMOTE_ADDR')
+
+            threadvars.put('current_request', request)
+            threadvars.put('current_client_ip', ip)
+            return self.get_response(request)

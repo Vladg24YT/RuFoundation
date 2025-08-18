@@ -1,5 +1,4 @@
 import shutil
-from pathlib import Path
 
 from django.contrib.auth.models import AbstractUser as _UserType
 from django.db import transaction
@@ -8,8 +7,8 @@ from django.db.models.functions import Coalesce, Concat, Lower
 
 import renderer
 from renderer import RenderContext
-from system.models import User
-from web.models.sites import get_current_site
+from web.events import EventBase
+from web.models.users import User
 from web.models.articles import *
 from web.models.files import *
 
@@ -23,9 +22,62 @@ import unicodedata
 from web.models.forum import ForumThread, ForumPost
 from web.util import lock_table
 
+from web.controllers import notifications, media
+
+
 _FullNameOrArticle = Optional[Union[str, Article]]
 _FullNameOrCategory = Optional[Union[str, Category]]
 _FullNameOrTag = Optional[Union[str, Tag]]
+
+
+class AbstractArticleEvent(EventBase, is_abstract=True):
+    user: _UserType | None
+    full_name_or_article: _FullNameOrArticle
+
+    @property
+    def fullname(self):
+        if isinstance(self.full_name_or_article, Article):
+            return self.full_name_or_article.full_name
+        return self.full_name_or_article
+    
+    @property
+    def article(self):
+        if isinstance(self.full_name_or_article, str):
+            self.full_name_or_article = get_article(self.full_name_or_article)
+        return self.full_name_or_article
+
+
+class OnVote(AbstractArticleEvent):
+    old_vote: Vote | None
+    new_vote: Vote | None
+
+    @property
+    def is_new(self):
+        return self.new_vote != None and self.old_vote == None
+    
+    @property
+    def is_change(self):
+        return self.new_vote != None and self.old_vote != None
+    
+    @property
+    def is_remove(self):
+        return self.new_vote == None and self.old_vote != None
+    
+
+class OnCreateArticle(AbstractArticleEvent):
+    pass
+
+
+class OnDeleteArticle(AbstractArticleEvent):
+    pass
+
+
+class OnEditArticle(AbstractArticleEvent):
+    log_entry: ArticleLogEntry
+
+    @property
+    def is_new(self):
+        return self.log_entry.type == ArticleLogEntry.LogEntryType.New
 
 
 # Returns (category, name) from a full name
@@ -103,6 +155,7 @@ def create_article(full_name: str, user: Optional[_UserType] = None) -> Article:
         author=user
     )
     article.save()
+    OnCreateArticle(user, article).emit()
     return article
 
 
@@ -121,6 +174,8 @@ def add_log_entry(full_name_or_article: _FullNameOrArticle, log_entry: ArticleLo
                 max_rev_number = -1
             log_entry.rev_number = max_rev_number + 1
             log_entry.save()
+
+            OnEditArticle(log_entry.user, article, log_entry).emit()
 
             article.updated_at = log_entry.created_at
             article.save()
@@ -149,6 +204,7 @@ def get_log_entries_paged(full_name_or_article: _FullNameOrArticle, c_from: int,
 # Revert all revisions to specific revision
 def revert_article_version(full_name_or_article: _FullNameOrArticle, rev_number: int, user: Optional[_UserType] = None):
     article = get_article(full_name_or_article)
+    pref_full_name = get_full_name(full_name_or_article)
 
     new_props = {}
 
@@ -315,17 +371,24 @@ def revert_article_version(full_name_or_article: _FullNameOrArticle, rev_number:
     tags_added_meta = []
     tags_removed_meta = []
 
-    tags = list(get_tags(article))
+    tags = [x.id for x in get_tags_internal(article)]
     for tag in new_props.get('removed_tags', []):
+        # safety: some outdated revisions have string tags here
+        if not isinstance(tag, int):
+            continue
         try:
             tags.remove(tag)
             tags_removed_meta.append(tag)
         except ValueError:
             pass
     for tag in new_props.get('added_tags', []):
+        # safety: some outdated revisions have string tags here
+        if not isinstance(tag, int):
+            continue
         tags.append(tag)
         tags_added_meta.append(tag)
-    set_tags(article, tags, user, False)
+    new_tags = list(Tag.objects.filter(id__in=tags))
+    set_tags_internal(article, new_tags, user, False)
 
     if tags_added_meta or tags_removed_meta:
         subtypes.append(ArticleLogEntry.LogEntryType.Tags)
@@ -404,6 +467,7 @@ def revert_article_version(full_name_or_article: _FullNameOrArticle, rev_number:
     )
 
     add_log_entry(article, log)
+    media.symlinks_article_update(article, pref_full_name)
 
 
 # Creates new article version for specified article
@@ -487,6 +551,8 @@ def update_full_name(full_name_or_article: _FullNameOrArticle, new_full_name: st
         )
         add_log_entry(article, log)
 
+    media.symlinks_article_update(article, prev_full_name)
+
 
 def _get_article_votes_meta(full_name_or_article: _FullNameOrArticle):
     article = get_article(full_name_or_article)
@@ -552,8 +618,9 @@ def update_title(full_name_or_article: _FullNameOrArticle, new_title: str, user:
 def delete_article(full_name_or_article: _FullNameOrArticle):
     article = get_article(full_name_or_article)
     ExternalLink.objects.filter(link_from__iexact=get_full_name(full_name_or_article)).delete()
+    media.symlinks_article_delete(article)
     article.delete()
-    file_storage = Path(settings.MEDIA_ROOT) / article.site.slug / article.media_name
+    file_storage = Path(settings.MEDIA_ROOT) / 'media' / article.media_name
     # this may have race conditions with file upload, because filesystem does not know about database transactions
     for i in range(3):
         try:
@@ -609,6 +676,35 @@ def get_latest_source(full_name_or_article: _FullNameOrArticle) -> Optional[str]
     if ver is not None:
         return ver.source
     return None
+
+
+# Get source of article at specific revision number
+def get_source_at_rev_num(full_name_or_article: _FullNameOrArticle, rev_num: int) -> Optional[str]:
+    article = get_article(full_name_or_article)
+    entry = get_log_entry(article, rev_num)
+    if not entry:
+        return None
+
+    def get_version_from_meta(meta):
+        if 'source' in meta:
+            return get_version(meta['source']['version_id'])
+        elif "version_id" in meta:
+            return get_version(meta["version_id"])
+        else:
+            return None
+
+    version = get_version_from_meta(entry.meta)
+    if not version:
+        log_entries = list(get_log_entries(article))
+        for old_entry in log_entries[log_entries.index(entry):]:
+            version = get_version_from_meta(old_entry.meta)
+            if version:
+                break
+
+    if not version:
+        return None
+
+    return version.source
 
 
 # Get parent of article
@@ -685,11 +781,6 @@ def get_tag(full_name_or_tag_id: _FullNameOrTag, create: bool = False) -> Option
             return Tag.objects.get(category=category, name=name)
         except (Tag.DoesNotExist, TagsCategory.DoesNotExist):
             return None
-    if type(full_name_or_tag_id) == int:
-        try:
-            return Tag.objects.get(id=full_name_or_tag_id)
-        except Tag.DoesNotExist:
-            return None
     if not isinstance(full_name_or_tag_id, Tag):
         raise ValueError('Expected str or Tag')
     return full_name_or_tag_id
@@ -697,9 +788,13 @@ def get_tag(full_name_or_tag_id: _FullNameOrTag, create: bool = False) -> Option
 
 # Get tags from article
 def get_tags(full_name_or_article: _FullNameOrArticle) -> Sequence[str]:
+    return list(sorted([x.full_name.lower() for x in get_tags_internal(full_name_or_article)]))
+
+
+def get_tags_internal(full_name_or_article: _FullNameOrArticle) -> Sequence[Tag]:
     article = get_article(full_name_or_article)
     if article:
-        return list(sorted([x.full_name.lower() for x in article.tags.prefetch_related("category")]))
+        return article.tags.prefetch_related("category")
     return []
 
 
@@ -712,12 +807,18 @@ def get_tags_categories(full_name_or_article: _FullNameOrArticle) -> Dict[TagsCa
 
 
 # Set tags for article
-def set_tags(full_name_or_article: _FullNameOrArticle, tags: Sequence[Union[str, int]], user: Optional[_UserType] = None, log: bool = True):
+def set_tags(full_name_or_article: _FullNameOrArticle, tags: Sequence[Union[str]], user: Optional[_UserType] = None, log: bool = True):
     article = get_article(full_name_or_article)
-    article_tags = article.tags.all()
 
     allow_creating = article.get_settings().creating_tags_allowed
-    tags = list(filter(lambda x: x is not None, [get_tag(x, create=allow_creating) for x in tags if isinstance(x, int) or is_tag_name_allowed(x)]))
+    tags = list(filter(lambda x: x is not None, [get_tag(x, create=allow_creating) for x in tags if is_tag_name_allowed(x)]))
+
+    return set_tags_internal(article, tags, user=user, log=log)
+
+
+def set_tags_internal(full_name_or_article: _FullNameOrArticle, tags: Sequence[Tag], user: Optional[_UserType] = None, log: bool = True):
+    article = get_article(full_name_or_article)
+    article_tags = article.tags.all()
 
     removed_tags = []
     added_tags = []
@@ -750,26 +851,28 @@ def set_tags(full_name_or_article: _FullNameOrArticle, tags: Sequence[Union[str,
 
 # Get article comment info
 # This may actually create a thread if it does not exist yet
-def get_comment_info(full_name_or_article: _FullNameOrArticle) -> (int, int):
+def get_comment_info(full_name_or_article: _FullNameOrArticle) -> tuple[int, int]:
     article = get_article(full_name_or_article)
     if not article:
         return 0, 0
-    thread, _ = ForumThread.objects.get_or_create(article=article)
+    thread, created = ForumThread.objects.get_or_create(article=article)
+    if created:
+        notifications.subscribe_to_notifications(subscriber=article.author, forum_thread=thread)
     post_count = ForumPost.objects.filter(thread=thread).count()
     return thread.id, post_count
 
 
 # Get article rating
-def get_rating(full_name_or_article: _FullNameOrArticle) -> (int | float, int, int, Settings.RatingMode):
+def get_rating(full_name_or_article: _FullNameOrArticle) -> tuple[int | float, int, int, Settings.RatingMode]:
     article = get_article(full_name_or_article)
     if not article:
         return 0, 0, 0, Settings.RatingMode.Disabled
     obj_settings = article.get_settings()
     if obj_settings.rating_mode == Settings.RatingMode.UpDown:
-        data = Vote.objects.filter(article=article).aggregate(sum=Coalesce(Sum('rate'), 0, output_field=IntegerField()), count=Count('rate'), good=Count('rate', filter=Q(rate=1)))
+        data = article.votes.aggregate(sum=Coalesce(Sum('rate'), 0, output_field=IntegerField()), count=Count('rate'), good=Count('rate', filter=Q(rate=1)))
         return data['sum'] or 0, data['count'] or 0, round((data['good'] or 0) / (data['count'] or 1) * 100), obj_settings.rating_mode
     elif obj_settings.rating_mode == Settings.RatingMode.Stars:
-        data = Vote.objects.filter(article=article).aggregate(avg=Coalesce(Avg('rate'), 0.0), count=Count('rate'), good=Count('rate', filter=Q(rate__gte=3)))
+        data = article.votes.aggregate(avg=Coalesce(Avg('rate'), 0.0), count=Count('rate'), good=Count('rate', filter=Q(rate__gte=3)))
         return round(data['avg'], 1) or 0.0, data['count'] or 0, round((data['good'] or 0) / (data['count'] or 1) * 100), obj_settings.rating_mode
     elif obj_settings.rating_mode == Settings.RatingMode.Disabled:
         return 0, 0, 0, obj_settings.rating_mode
@@ -792,12 +895,37 @@ def get_formatted_rating(full_name_or_article: _FullNameOrArticle) -> str:
         return '%d' % rating
 
 
-def add_vote(full_name_or_article: _FullNameOrArticle, user: settings.AUTH_USER_MODEL, rate: int | float | None):
+class VotedTooSoonError(RuntimeError):
+    def __init__(self, *args, time_left=0, time_total=0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.time_left = time_left
+        self.time_total = time_total
+
+
+def add_vote(full_name_or_article: _FullNameOrArticle, user: _UserType, rate: int | float | None):
     article = get_article(full_name_or_article)
 
-    Vote.objects.filter(article=article, user=user).delete()
+    old_vote_query = Vote.objects.filter(article=article, user=user)
+    old_vote = old_vote_query.first()
+    old_vote_query.delete()
+
+    # temporarily disabled
+    if False and not user.is_staff and not user.is_superuser and not old_vote:
+        last_vote_of_this_user = Vote.objects.filter(user=user).order_by('-id').first()
+        if last_vote_of_this_user and last_vote_of_this_user.date:
+            time_since = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc) - last_vote_of_this_user.date
+            time_total = datetime.timedelta(minutes=3)
+            if time_since < time_total:
+                time_left = time_total - time_since
+                raise VotedTooSoonError('Voting too soon (at least 5 minutes between votes expected)', time_left=time_left.seconds, time_total=time_total.seconds)
+
+    new_vote = None
     if rate is not None:
-        Vote(article=article, user=user, rate=rate, visual_group=user.visual_group).save()
+        new_vote = Vote(article=article, user=user, rate=rate, visual_group=user.visual_group)
+        new_vote.save()
+
+    OnVote(user, article, old_vote, new_vote).emit()
+    
 
 
 # Set article lock status
@@ -841,9 +969,10 @@ def add_file_to_article(full_name_or_article: _FullNameOrArticle, file: File, us
         meta={'name': file.name, 'id': file.id}
     )
     add_log_entry(article, log)
+    media.symlinks_article_update(article)
 
 
-def get_file_space_usage() -> (int, int):
+def get_file_space_usage() -> tuple[int, int]:
     current_files_size = File.objects.filter(deleted_at=None).aggregate(size=Sum('size')).get('size') or 0
     absolute_files_size = File.objects.aggregate(size=Sum('size')).get('size') or 0
     return current_files_size, absolute_files_size
@@ -862,6 +991,7 @@ def delete_file_from_article(full_name_or_article: _FullNameOrArticle, file: Fil
         if os.path.exists(file.local_media_path):
             os.unlink(file.local_media_path)
         file.delete()
+        media.symlinks_article_update(article)
     else:
         file.deleted_at = datetime.datetime.now(datetime.timezone.utc)
         file.deleted_by = user
@@ -873,6 +1003,7 @@ def delete_file_from_article(full_name_or_article: _FullNameOrArticle, file: Fil
             meta={'name': file.name, 'id': file.id}
         )
         add_log_entry(article, log)
+        media.symlinks_article_update(article)
 
 
 # Restore deleted file to article
@@ -892,6 +1023,7 @@ def restore_file_from_article(full_name_or_article: _FullNameOrArticle, file: Fi
         meta={'name': file.name, 'id': file.id}
     )
     add_log_entry(article, log)
+    media.symlinks_article_update(article)
 
 
 # Rename file in article
@@ -910,13 +1042,14 @@ def rename_file_in_article(full_name_or_article: _FullNameOrArticle, file: File,
             meta={'name': file.name, 'prev_name': old_name, 'id': file.id}
         )
         add_log_entry(article, log)
+    media.symlinks_article_update(article)
 
 
 # Check if name is allowed for creation
 # Pretty much this blocks six 100% special paths, everything else is OK
 def is_full_name_allowed(article_name: str) -> bool:
     article_name = article_name.lower()
-    reserved = ['-', '_', 'api', 'forum', 'local--files', 'local--code']
+    reserved = ['-', '_', 'api', 'forum', 'local--files', 'local--code', 'local--html', 'local--theme']
     if article_name in reserved:
         return False
     if len(article_name) > 128:

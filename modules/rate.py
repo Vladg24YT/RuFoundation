@@ -2,10 +2,16 @@ from django.contrib.auth.models import AnonymousUser
 
 from web.controllers.articles import get_rating, Vote
 from web.models.settings import Settings
-from . import ModuleError
 from web.controllers import articles, permissions
 
 from renderer.utils import render_user_to_json, render_template_from_string
+
+from . import ModuleError
+from ._csrf_protection import csrf_safe_method
+
+
+def allow_api():
+    return True
 
 
 def render(context, _params):
@@ -50,10 +56,7 @@ def render(context, _params):
         return ''
 
 
-def allow_api():
-    return True
-
-
+@csrf_safe_method
 def api_get_rating(context, _params):
     if not context.article:
         raise ModuleError('Страница не указана')
@@ -61,6 +64,7 @@ def api_get_rating(context, _params):
     return {'pageId': context.article.full_name, 'rating': rating, 'voteCount': votes, 'popularity': popularity, 'ratingMode': mode}
 
 
+@csrf_safe_method
 def api_get_votes(context, _params):
     if not context.article:
         raise ModuleError('Страница не указана')
@@ -77,6 +81,26 @@ def api_get_votes(context, _params):
             rendered_vote['date'] = db_vote.date.isoformat() if db_vote.date else None
         votes.append(rendered_vote)
     return {'pageId': context.article.full_name, 'votes': votes, 'rating': rating, 'popularity': popularity, 'mode': mode}
+
+
+def pluralize_russian(number, base):
+    if number % 10 in (2, 3, 4):
+        return f'{number} {base}ы'
+    if number % 10 in (5, 6, 7, 8, 9, 0):
+        return f'{number} {base}'
+    if number % 10 in (1,):
+        return f'{number} {base}у'
+
+
+def format_time(seconds):
+    t_minutes = int(seconds / 60)
+    t_seconds = int(seconds % 60)
+    s = ''
+    if t_seconds or not t_minutes:
+        s = pluralize_russian(t_seconds, 'секунд')
+    if t_minutes:
+        s = pluralize_russian(t_minutes, 'минут') + ' ' + s
+    return s
 
 
 def api_rate(context, params):
@@ -100,6 +124,9 @@ def api_rate(context, params):
             if value < 0 or value > 5:
                 raise ModuleError('Некорректная оценка %s' % str(value))
 
-    articles.add_vote(context.article, context.user, value)
+    try:
+        articles.add_vote(context.article, context.user, value)
+    except articles.VotedTooSoonError as e:
+        raise ModuleError(f'Вы уже голосовали за другую статью менее {format_time(e.time_total)} назад. Попробуйте снова через {format_time(e.time_left)}. Вы можете воспользоваться оставшимся временем, чтобы получше ознакомиться со статьёй, которую оцениваете.')
 
     return api_get_rating(context, params)

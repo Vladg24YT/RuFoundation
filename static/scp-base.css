@@ -93,6 +93,10 @@ div.class1 > div {
     box-shadow: inset 2px 3px 6px rgba(0,0,0,.15);
     border-radius: 5px 5px 0 0;
 }
+
+.thread-container .post .long .head .title {
+    word-break: break-all;
+}
  
 /* Hide Forum Signatures */
 .signature {
@@ -1100,6 +1104,7 @@ div.sexy-box div.image-container img {
  
 .scp-image-block img {
     border: 0;
+    width: 100%;
 }
  
 .scp-image-block .scp-image-caption {
@@ -1124,7 +1129,7 @@ div.sexy-box div.image-container img {
 /* Wikiwalk Navigation */
 .footer-wikiwalk-nav {
     font-weight: bold;
-    font-size: 75%;
+    font-size: 90%;
 }
  
 /* Licensebox */
@@ -1161,6 +1166,11 @@ div.sexy-box div.image-container img {
     background-image: linear-gradient(to right, #eee, #eeecec);
     box-shadow: inset 2px 3px 6px rgba(0, 0, 0, .15);
     border-radius: 5px 5px 0 0;
+}
+
+.post-container .post-container {
+    border-left: 2px solid rgba(0,0,0,.25);
+    padding-left: .75rem;
 }
  
 /* Hide Forum Signatures */
@@ -1569,7 +1579,7 @@ td {
     }
  
     #edit-page-title {
-        max-width: 90%;
+        width: 90%;
     }
  
     .content-panel.left-column, .content-panel.right-column {
@@ -1967,7 +1977,6 @@ ul li ul li a {
         left: 0;
         width: 17em;
         margin: 0;
-        border: 1px solid #dedede;
         z-index: 10;
     }
  

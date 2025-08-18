@@ -29,7 +29,7 @@ DEBUG = os.environ.get('DEBUG', 'true') == 'true'
 
 ALLOWED_HOSTS = ['*']
 
-SILENCED_SYSTEM_CHECKS = ['templates.E003']
+# SILENCED_SYSTEM_CHECKS = ['templates.E003']
 
 
 # Application definition
@@ -45,7 +45,6 @@ INSTALLED_APPS = [
 
     'guardian',
 
-    'system',
     'web',
 
     'django.contrib.staticfiles',
@@ -62,9 +61,11 @@ MIDDLEWARE = [
     'web.middleware.DropWikidotAuthMiddleware',
     'web.middleware.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'system.middleware.BotAuthTokenMiddleware',
+    'web.middleware.BotAuthTokenMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
-    'web.middleware.MediaHostMiddleware'
+    'web.middleware.MediaHostMiddleware',
+    'web.middleware.UserContextMiddleware',
+    'web.middleware.SpyRequestMiddleware',
 ]
 
 ROOT_URLCONF = 'scpdev.urls'
@@ -156,7 +157,6 @@ STATIC_ROOT = BASE_DIR / "static_dist"
 STATICFILES_STORAGE = "whitenoise.storage.CompressedStaticFilesStorage"
 
 MEDIA_HOST = os.environ.get('MEDIA_HOST', None)
-MEDIA_URL = "local--files/"
 MEDIA_ROOT = BASE_DIR / "files"
 
 
@@ -241,7 +241,7 @@ else:
 GOOGLE_TAG_ID = os.environ.get('GOOGLE_TAG_ID', None)
 
 
-AUTH_USER_MODEL = "system.User"
+AUTH_USER_MODEL = "web.User"
 
 LOGGING = {
     'version': 1,
@@ -266,4 +266,20 @@ LOGGING = {
 
 JAZZMIN_SETTINGS = {
     "user_avatar": "avatar",
+
+    "site_title": "RuFoundation",
+    "site_brand": "Админка",
+}
+
+
+# Dict of supported ranged content-types in format: MIME, CHUNK_SIZE_IN_BYTES
+RANGED_CONTENT_SERVING = {
+    "audio/*": 2097152,                   # 2 MB
+    "video/*": 4194304,                   # 4 MB
+    # "image/*": 524288,                    # 512 KB  ### Some shit will happen if you try to uncomment this option
+    "application/octet-stream": 4194304,  # 4 MB
+    "application/zip": 8388608,           # 8 MB
+    "application/gzip": 8388608,          # 8 MB
+    "application/x-tar": 8388608,         # 8 MB
+    "application/pdf": 1048576,           # 1 MB
 }

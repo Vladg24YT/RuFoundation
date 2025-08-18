@@ -10,7 +10,7 @@ import urllib.parse
 from renderer.templates import apply_template
 from renderer.utils import render_user_to_json
 from web.models.articles import Article
-from web.controllers import articles, permissions
+from web.controllers import articles, permissions, notifications
 
 from renderer import single_pass_render, single_pass_render_with_excerpt
 from renderer.parser import RenderContext
@@ -19,7 +19,8 @@ from modules.listpages import page_to_listpages_vars
 from typing import Optional, Tuple
 import json
 
-from web.models.sites import get_current_site
+from web.models.notifications import UserNotificationMapping
+from web.models.site import get_current_site
 
 import re
 
@@ -58,7 +59,7 @@ class ArticleView(TemplateResponseMixin, ContextMixin, View):
         return ""
 
     @staticmethod
-    def get_this_page_params(path_params: dict[str, str], param: str):
+    def get_this_page_params(path_params: dict[str, str], param: str, more_params: Optional[dict[str, str]]=None):
         if param.startswith('path|'):
             k = param[5:].lower()
             if k in path_params:
@@ -73,9 +74,11 @@ class ArticleView(TemplateResponseMixin, ContextMixin, View):
             if k in path_params:
                 return urllib.parse.quote(path_params[k], safe='')
             return urllib.parse.quote('%%' + param + '%%', safe='')
+        elif more_params is not None and param in more_params:
+            return more_params[param]
         return '%%' + param + '%%'
 
-    def render(self, fullname: str, article: Optional[Article], path_params: dict[str, str]) -> Tuple[str, int, Optional[str], str, Optional[str], str, int, Optional[datetime.datetime]]:
+    def render(self, fullname: str, article: Optional[Article], path_params: dict[str, str], canonical_url: str) -> Tuple[str, int, Optional[str], str, Optional[str], str, int, Optional[datetime.datetime]]:
         excerpt = ''
         image = None
         rev_number = 0
@@ -96,7 +99,7 @@ class ArticleView(TemplateResponseMixin, ContextMixin, View):
                         template_source = articles.get_latest_source(template)
 
                 source = page_to_listpages_vars(article, template_source, index=1, total=1)
-                source = apply_template(source, lambda param: self.get_this_page_params(path_params, param))
+                source = apply_template(source, lambda param: self.get_this_page_params(path_params, param, {'canonical_url': canonical_url}))
                 context = RenderContext(article, article, path_params, self.request.user)
                 content, excerpt, image = single_pass_render_with_excerpt(source, context)
                 redirect_to = context.redirect_to
@@ -161,18 +164,21 @@ class ArticleView(TemplateResponseMixin, ContextMixin, View):
         nav_top = self._render_nav("nav:top", article, path_params)
         nav_side = self._render_nav("nav:side", article, path_params)
 
-        content, status, redirect_to, excerpt, image, title, rev_number, updated_at = self.render(article_name, article, path_params)
+        site = get_current_site()
+        canonical_url = '//%s/%s%s' % (site.domain, article.full_name if article else article_name, encoded_params)
+
+        content, status, redirect_to, excerpt, image, title, rev_number, updated_at = self.render(article_name, article, path_params, canonical_url)
 
         context = super(ArticleView, self).get_context_data(**kwargs)
 
+        notification_count = UserNotificationMapping.objects.filter(recipient=self.request.user, is_viewed=False).count() if self.request.user.is_authenticated else 0
+
         login_status_config = {
-            'user': render_user_to_json(self.request.user)
+            'user': render_user_to_json(self.request.user),
+            'notificationCount': notification_count
         }
 
-        site = get_current_site()
         article_rating, article_votes, article_popularity, article_rating_mode = articles.get_rating(article)
-
-        canonical_url = '//%s/%s%s' % (site.domain, article.full_name if article else article_name, encoded_params)
 
         options_config = {
             'optionsEnabled': article is not None,
@@ -190,6 +196,11 @@ class ArticleView(TemplateResponseMixin, ContextMixin, View):
             'commentCount': comment_count,
             'canDelete': permissions.check(self.request.user, "delete", article),
             'canCreateTags': site.get_settings().creating_tags_allowed,
+            'canWatch': not self.request.user.is_anonymous,
+            'isWatching': not self.request.user.is_anonymous and (
+                notifications.is_subscribed(self.request.user, article=article) or \
+                notifications.is_subscribed(self.request.user, forum_thread=path_params.get("t"))
+            ),
         }
 
         tags_categories = articles.get_tags_categories(article)
@@ -226,6 +237,12 @@ class ArticleView(TemplateResponseMixin, ContextMixin, View):
             context.update({
                 'google_tag_id': settings.GOOGLE_TAG_ID
             })
+
+        category_name, _ = articles.get_name(article_name)
+        category = permissions.get_or_default_category(category_name)
+        context.update({
+            'noindex': not category.is_indexed
+        })
 
         return context
 

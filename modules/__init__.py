@@ -2,6 +2,7 @@ import pkgutil
 import sys
 import logging
 from types import ModuleType
+from importlib.util import module_from_spec
 
 from django.db import transaction
 
@@ -30,7 +31,9 @@ def get_all_modules():
             if fullname in sys.modules:
                 m = sys.modules[fullname]
             else:
-                m = importer.find_module(fullname).load_module(fullname)
+                spec = importer.find_spec(fullname)
+                m = module_from_spec(spec)
+                spec.loader.exec_module(m)
         except:
             logging.error('Failed to load module \'%s\':', modname.lower(), exc_info=True)
             continue
@@ -101,7 +104,7 @@ def handle_api(name, method, context, params):
             api_method = 'api_%s' % method
             if api_method not in m.__dict__ or not callable(m.__dict__[api_method]):
                 raise ModuleError('Некорректный метод для модуля \'%s\'')
-            return m.__dict__[api_method](context, params)
+            return m.__dict__[api_method](context, params), getattr(m.__dict__[api_method], 'is_csrf_safe', False)
         else:
             raise ModuleError('Модуль \'%s\' не поддерживает API')
     except ModuleError:

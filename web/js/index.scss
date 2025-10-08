@@ -16,7 +16,6 @@
 
 .printuser.avatarhover img.small {
   padding: 0;
-  margin-right: 8px;
   border: 1px solid #777;
   transition: all 0.25s ease;
   pointer-events: none;
@@ -27,6 +26,14 @@
   transform: scale(4);
   z-index: 100;
   position: relative;
+}
+
+.printuser {
+  white-space: nowrap;
+}
+
+.mod-by .printuser {
+  white-space: initial;
 }
 
 // fixes printusers misbehaving in tables
@@ -148,4 +155,50 @@
 
 .w-code {
   white-space: pre !important;
+}
+
+/* User rate on forum post */
+.thread-container .post .long .head .vote {
+	flex-grow: 1;
+    text-align: right;
+	color: #666
+}
+
+.thread-container .post .long .head .rate {
+	font-weight: bold;
+}
+
+.thread-container .post .long .head .rate::before {
+	font-family: "Font Awesome 5 Free";
+    content: "\f005 ";
+    letter-spacing: 2px;
+    color: #666;
+}
+/* ======================= */
+
+/* New forum triks */
+.thread-container .post .long .head.op-post {
+    background: #e4f0c8;
+}
+/* =============== */
+
+.printuser .badge {
+    background: gray;
+    padding: 0px 2px 0px 2px;
+    border-radius: 3px;
+    color: white;
+    font-weight: 500;
+    font-size: .75em;
+    height: 1.5em;
+    display: inline-flex;
+    align-items: center;
+    vertical-align: text-top;
+    box-sizing: border-box;
+}
+
+.printuser .icon {
+    display: inline-flex;
+    vertical-align: text-top;
+    height: 14.4px;
+    width: 14.4px;
 }

@@ -3,13 +3,13 @@ import math
 
 from modules import ModuleError
 from modules.listpages import render_date, render_pagination
-from renderer import RenderContext, render_template_from_string, render_user_to_html
-from renderer.templates import apply_template
+from renderer import RenderContext
 
 import renderer
 
-from renderer.utils import render_user_to_json
-from web.controllers import articles, permissions
+from renderer.utils import render_user_to_json, render_user_to_html, render_template_from_string, render_vote_to_html
+from web.controllers import articles
+from web.models.articles import Vote
 from web.models.forum import ForumCategory, ForumThread, ForumSection, ForumPost, ForumPostVersion
 
 from ._csrf_protection import csrf_safe_method
@@ -37,10 +37,24 @@ def get_post_info(context, thread, posts, show_replies=True):
 
     for post in posts:
         replies = ForumPost.objects.filter(reply_to=post).order_by('created_at') if show_replies else []
+        author_vote = ''
+        is_op = thread.author == post.author
+
+        if thread.article:
+            rating_mode = thread.article.settings.rating_mode
+            author_vote = Vote.objects.filter(user=post.author, article=thread.article).last()
+            author_vote = render_vote_to_html(author_vote, rating_mode)
+            if thread.article.author == post.author:
+                is_op = True
+
+        
+        
         render_post = {
             'id': post.id,
             'name': post.name,
+            'is_op': is_op, #e4f0c8
             'author': render_user_to_html(post.author),
+            'author_rate': author_vote,
             'created_at': render_date(post.created_at),
             'updated_at': render_date(post.updated_at),
             'content': renderer.single_pass_render(post_contents.get(post.id, ('', None))[0], RenderContext(None, None, {}, context.user), 'message'),
@@ -55,9 +69,9 @@ def get_post_info(context, thread, posts, show_replies=True):
                 'lastRevisionDate': post.updated_at.isoformat(),
                 'lastRevisionAuthor': render_user_to_json(post_contents.get(post.id, ('', None))[1]),
                 'user': render_user_to_json(context.user),
-                'canReply': permissions.check(context.user, 'create', ForumPost(thread=thread)),
-                'canEdit': permissions.check(context.user, 'edit', post),
-                'canDelete': permissions.check(context.user, 'delete', post),
+                'canReply': context.user.has_perm('roles.create_forum_posts', thread) if not thread.article else context.user.has_perm('roles.comment_articles', thread),
+                'canEdit': context.user.has_perm('roles.edit_forum_posts', post),
+                'canDelete': context.user.has_perm('roles.delete_forum_posts', post)
             })
         }
         post_info.append(render_post)
@@ -74,12 +88,12 @@ def render_posts(post_info):
         <div class="post-container">
             <div class="post" id="post-{{ post.id }}">
                 <div class="long">
-                    <div class="head">
+                    <div class="head {% if post.is_op %}op-post{% endif %}">
                         <div class="title">
                             {{ post.name }}
                         </div>
                         <div class="info">
-                            {{ post.author }} {{ post.created_at }}
+                            {{ post.author }} {{ post.created_at }} {{ post.author_rate }}
                         </div>
                     </div>
                     <div class="content">
@@ -114,15 +128,18 @@ def render(context: RenderContext, params):
     if thread is None:
         context.status = 404
         raise ModuleError('Тема "%s" не найдена' % t)
-
-    if not permissions.check(context.user, 'view', thread):
-        raise ModuleError('Недостаточно прав для просмотра темы')
-
+    
     category = thread.category
-    if not category:
+    if category:
+        if not context.user.has_perm('roles.view_forum_threads', thread):
+            raise ModuleError('Недостаточно прав для просмотра темы')
+    else:
+        if not context.user.has_perm('roles.view_articles_comments', thread):
+            raise ModuleError(f'Недостаточно прав для просмотра обсуждения')
+        
         # find first category that matches
         for c in ForumCategory.objects.filter(is_for_comments=True):
-            if permissions.check(context.user, 'view', c):
+            if context.user.has_perm('roles.view_forum_categories', c):
                 category = c
                 break
 
@@ -193,13 +210,13 @@ def render(context: RenderContext, params):
     raw_categories = ForumCategory.objects.all().order_by('order', 'id')
     raw_sections = ForumSection.objects.all().order_by('order', 'id')
     for s in raw_sections:
-        if not permissions.check(context.user, 'view', s):
+        if not context.user.has_perm('roles.view_forum_sections', thread):
             continue
         cs = []
         for c in raw_categories:
             if c.section_id != s.id:
                 continue
-            if not permissions.check(context.user, 'view', c):
+            if not context.user.has_perm('roles.view_forum_categories', c):
                 continue
             cs.append({'name': '\u00a0\u00a0'+c.name, 'canMove': not c.is_for_comments, 'id': c.id})
         if cs:
@@ -210,10 +227,10 @@ def render(context: RenderContext, params):
         'threadId': thread.id,
         'threadName': name,
         'threadDescription': thread.description,
-        'canEdit': thread.article_id is None and permissions.check(context.user, 'edit', thread),
-        'canPin': thread.article_id is None and permissions.check(context.user, 'pin', thread),
-        'canLock': permissions.check(context.user, 'lock', thread),
-        'canMove': thread.article_id is None and permissions.check(context.user, 'move', thread),
+        'canEdit': thread.article_id is None and context.user.has_perm('roles.edit_forum_threads', thread),
+        'canPin': thread.article_id is None and context.user.has_perm('roles.pin_forum_threads', thread),
+        'canLock': context.user.has_perm('roles.lock_forum_threads', thread),
+        'canMove': thread.article_id is None and context.user.has_perm('roles.move_forum_threads', thread),
         'isLocked': thread.is_locked,
         'isPinned': thread.is_pinned,
         'moveTo': categories,
@@ -280,7 +297,7 @@ def render(context: RenderContext, params):
         pagination=render_pagination(short_url, page, max_page) if max_page != 1 else '',
         new_post_config=json.dumps(new_post_config),
         posts=render_posts(post_info),
-        can_reply=permissions.check(context.user, 'create', ForumPost(thread=thread)),
+        can_reply=context.user.has_perm('roles.create_forum_posts', thread) if not thread.article else context.user.has_perm('roles.comment_articles', thread),
         content_only=content_only,
         data_path_params=json.dumps(context.path_params),
         data_params=json.dumps(params),
@@ -316,7 +333,7 @@ def api_update(context, params):
         raise ModuleError('Тема не найдена или не указана')
 
     if 'name' in params or 'description' in params:
-        if not permissions.check(context.user, 'edit', thread):
+        if not context.user.has_perm('roles.edit_forum_threads', thread):
             raise ModuleError('Недостаточно прав для редактирования темы')
         if 'name' in params:
             thread.name = params['name']
@@ -324,23 +341,23 @@ def api_update(context, params):
             thread.description = params['description']
 
     if 'islocked' in params:
-        if not permissions.check(context.user, 'lock', thread):
+        if not context.user.has_perm('roles.lock_forum_threads', thread):
             raise ModuleError('Недостаточно прав для блокировки темы')
         thread.is_locked = bool(params['islocked'])
 
     if 'ispinned' in params:
-        if not permissions.check(context.user, 'pin', thread):
+        if not context.user.has_perm('roles.pin_forum_threads', thread):
             raise ModuleError('Недостаточно прав для прикрепления темы')
         thread.is_pinned = bool(params['ispinned'])
 
     if 'categoryid' in params:
-        if not permissions.check(context.user, 'move', thread):
+        if not context.user.has_perm('roles.move_forum_threads', thread):
             raise ModuleError('Недостаточно прав для перемещения темы')
         try:
             c = int(params['categoryid'])
             category = ForumCategory.objects.filter(id=c)
             category = category[0] if category else None
-            if not permissions.check(context.user, 'view', category):
+            if not context.user.has_perm('roles.view_forum_categories', category):
                 raise ModuleError('Недостаточно прав для просмотра целевого раздела')
         except:
             category = None

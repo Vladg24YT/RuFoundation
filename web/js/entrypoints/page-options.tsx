@@ -24,6 +24,7 @@ interface Props {
   optionsEnabled?: boolean
   editable?: boolean
   lockable?: boolean
+  tagable?: boolean
   rating?: number
   ratingVotes?: number
   ratingMode?: RatingMode
@@ -31,9 +32,14 @@ interface Props {
   canRate?: boolean
   canDelete?: boolean
   canComment?: boolean
+  canViewComments?: boolean
   commentThread?: string
   commentCount?: number
   canCreateTags?: boolean
+  canManageFiles?: boolean
+  canRename?: boolean
+  canCreateHere?: boolean
+  canResetVotes?: boolean
   canWatch?: boolean
   isWatching?: boolean
 }
@@ -58,6 +64,7 @@ const PageOptions: React.FC<Props> = ({
   optionsEnabled,
   editable,
   lockable,
+  tagable,
   rating,
   ratingVotes,
   ratingMode,
@@ -65,9 +72,14 @@ const PageOptions: React.FC<Props> = ({
   canRate,
   canDelete,
   canComment,
+  canViewComments,
   commentThread,
   commentCount,
   canCreateTags,
+  canManageFiles,
+  canRename,
+  canCreateHere,
+  canResetVotes,
   canWatch,
   isWatching,
 }: Props) => {
@@ -273,7 +285,7 @@ const PageOptions: React.FC<Props> = ({
         )
 
       case 'rating':
-        return <ArticleRating pageId={pageId} rating={rating} canEdit={editable} onClose={onCancelSubView} />
+        return <ArticleRating pageId={pageId} rating={rating} canEdit={editable} canResetVotes={canResetVotes} onClose={onCancelSubView} />
 
       case 'tags':
         return <ArticleTags pageId={pageId} onClose={onCancelSubView} canCreateTags={canCreateTags} />
@@ -297,10 +309,10 @@ const PageOptions: React.FC<Props> = ({
         return <ArticleRename pageId={pageId} onClose={onCancelSubView} />
 
       case 'files':
-        return <ArticleFiles pageId={pageId} onClose={onCancelSubView} editable={editable} />
+        return <ArticleFiles pageId={pageId} onClose={onCancelSubView} editable={canManageFiles} />
 
       case 'delete':
-        return <ArticleDelete pageId={pageId} canDelete={canDelete} onClose={onCancelSubView} />
+        return <ArticleDelete pageId={pageId} canDelete={canDelete} canRename={canRename} onClose={onCancelSubView} />
 
       case 'backlinks':
         return <ArticleBacklinksView pageId={pageId} onClose={onCancelSubView} />
@@ -361,17 +373,19 @@ const PageOptions: React.FC<Props> = ({
             Редактировать
           </a>
         )}
-        <a id="pagerate-button" className="btn btn-default" href="#" onClick={onRate}>
-          {canRate ? 'Оценить' : 'Оценки'} ({renderRating()})
-        </a>
-        {editable && (
+        {ratingMode != 'disabled' && (
+          <a id="pagerate-button" className="btn btn-default" href="#" onClick={onRate}>
+            {canRate ? 'Оценить' : 'Оценки'} ({renderRating()})
+          </a>
+        )}
+        {tagable && (
           <a id="tags-button" className="btn btn-default" href="#" onClick={onTags}>
             Теги
           </a>
         )}
-        {canComment && (
+        {canViewComments  && (
           <a id="discuss-button" className="btn btn-default" href={commentThread || '/forum/start'}>
-            Обсудить ({commentCount || 0})
+            {canComment ? 'Обсудить' : 'Обсуждение'} ({commentCount || 0})
           </a>
         )}
         <a id="history-button" className="btn btn-default" href="#" onClick={onHistory}>
@@ -397,7 +411,7 @@ const PageOptions: React.FC<Props> = ({
               Родитель
             </a>
           )}
-          {editable && (
+          {canCreateHere && (
             <a id="child-page-button" className="btn btn-default" href="#" onClick={onChild}>
               Создать дочернюю страницу
             </a>
@@ -407,12 +421,12 @@ const PageOptions: React.FC<Props> = ({
               Заблокировать страницу
             </a>
           )}
-          {editable && (
+          {canRename && (
             <a id="rename-move-button" className="btn btn-default" href="#" onClick={onRename}>
               Переименовать
             </a>
           )}
-          {editable && (
+          {(canRename || canDelete) && (
             <a id="delete-button" className="btn btn-default" href="#" onClick={onDelete}>
               Удалить
             </a>

@@ -9,7 +9,9 @@ import math
 
 import renderer
 
-from web.controllers import articles, permissions
+from renderer.utils import render_vote_to_html
+from web.controllers import articles
+from web.models.articles import Vote
 from web.models.forum import ForumCategory, ForumSection, ForumPost
 
 
@@ -20,13 +22,27 @@ def has_content():
 def get_post_info(context, posts, category_for_comments):
     post_contents = get_post_contents(posts)
     post_info = []
+    
 
     for post in posts:
-        thread_url = '/forum/t-%d/%s' % (post.thread.id, articles.normalize_article_name(post.thread.name if post.thread.category_id else post.thread.article.display_name))
+        thread = post.thread
+        thread_url = '/forum/t-%d/%s' % (thread.id, articles.normalize_article_name(thread.name if thread.category_id else thread.article.display_name))
+        author_vote = ''
+        is_op = thread.author == post.author
+
+        if thread.article:
+            rating_mode = thread.article.settings.rating_mode
+            author_vote = Vote.objects.filter(user=post.author, article=thread.article).last()
+            author_vote = render_vote_to_html(author_vote, rating_mode)
+            if thread.article.author == post.author:
+                is_op = True
+        
         render_post = {
             'id': post.id,
             'name': post.name.strip() or 'Перейти к сообщению',
+            'is_op': is_op,
             'author': render_user_to_html(post.author),
+            'author_rate': author_vote,
             'created_at': render_date(post.created_at),
             'content': renderer.single_pass_render(post_contents.get(post.id, ('', None))[0], RenderContext(None, None, {}, context.user), 'message'),
             'url': '%s#post-%d' % (thread_url, post.id),
@@ -57,7 +73,7 @@ def get_post_info(context, posts, category_for_comments):
 def render(context: RenderContext, params):
     context.title = 'Последние сообщения форума'
 
-    all_categories = [x for x in ForumCategory.objects.order_by('order', 'id') if permissions.check(context.user, 'view', x)]
+    all_categories = [x for x in ForumCategory.objects.order_by('order', 'id') if context.user.has_perm('roles.view_forum_categories', x)]
 
     category_param = '*'
 
@@ -122,7 +138,7 @@ def render(context: RenderContext, params):
     raw_categories = all_categories
     raw_sections = ForumSection.objects.all().order_by('order', 'id')
     for s in raw_sections:
-        if not permissions.check(context.user, 'view', s):
+        if not context.user.has_perm('roles.view_forum_sections', s):
             continue
         cs = []
         for c in raw_categories:
@@ -163,20 +179,21 @@ def render(context: RenderContext, params):
                     <div class="post-container">
                         <div class="post" id="post-{{ post.id }}">
                             <div class="long">
-                                <div class="head">
+                                <div class="head {% if post.is_op %}op-post{% endif %}">
                                     <div class="title">
                                         <a href="{{ post.url }}">{{ post.name }}</a>
                                     </div>
                                     <div class="info">
-                                        {{ post.author }} {{ post.created_at }}
-                                        <br>
+                                        {{ post.author }} {{ post.created_at }} {{ post.author_rate }}
+                                    </div>
+                                    <span>
                                         в дискуссии
                                         {% if post.category %}
                                         <a href="{{ post.category.section_url }}">{{ post.category.section_name }}</a> &raquo;
                                         <a href="{{ post.category.url }}">{{post.category.name}}</a> &raquo;
                                         {% endif %}
                                         <a href="{{ post.thread.url}}">{{ post.thread.name }}</a>
-                                    </div>
+                                    </span>
                                 </div>
                                 <div class="content">
                                     {{ post.content }}

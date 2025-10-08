@@ -1,28 +1,28 @@
+import unicodedata
 import shutil
+import datetime
+import re
+import os.path
 
+from pathlib import Path
+from typing import Optional, Union, Sequence, Tuple, Dict
+
+from django.conf import settings
 from django.contrib.auth.models import AbstractUser as _UserType
 from django.db import transaction
 from django.db.models import QuerySet, Sum, Avg, Count, Max, TextField, Value, IntegerField, Q, F
 from django.db.models.functions import Coalesce, Concat, Lower
 
 import renderer
-from renderer import RenderContext
 from web.events import EventBase
-from web.models.users import User
-from web.models.articles import *
-from web.models.files import *
-
-from typing import Optional, Union, Sequence, Tuple, Dict
-import datetime
-import re
-import os.path
-
-import unicodedata
-
-from web.models.forum import ForumThread, ForumPost
-from web.util import lock_table
-
 from web.controllers import notifications, media
+from web.models.articles import Article, ArticleLogEntry, ArticleVersion, Category, ExternalLink, Tag, TagsCategory, Vote
+from web.models.files import File
+from web.models.settings import Settings
+from web.models.users import User
+from web.models.forum import ForumThread, ForumPost
+from web.models.roles import Role
+from web.util import lock_table
 
 
 _FullNameOrArticle = Optional[Union[str, Article]]
@@ -110,17 +110,19 @@ def normalize_article_name(full_name: str) -> str:
     return '%s:%s' % (category, name)
 
 
+def denormalize_article_name(full_name: str):
+    if ':' not in full_name:
+        return f'_default:{full_name}'
+    return full_name
+
+
 def get_article(full_name_or_article: _FullNameOrArticle) -> Optional[Article]:
     if full_name_or_article is None:
         return None
     if type(full_name_or_article) == str:
         full_name_or_article = full_name_or_article.lower()
         category, name = get_name(full_name_or_article)
-        objects = Article.objects.filter(category__iexact=category, name__iexact=name)
-        if objects:
-            return objects[0]
-        else:
-            return None
+        return Article.objects.filter(category=category, name=name).first()
     if not isinstance(full_name_or_article, Article):
         raise ValueError('Expected str or Article')
     return full_name_or_article
@@ -441,16 +443,16 @@ def revert_article_version(full_name_or_article: _FullNameOrArticle, rev_number:
             Vote.objects.filter(article=article).delete()
             for vote in new_props['votes']['votes']:
                 try:
-                    vote_visual_group = VisualUserGroup.objects.get(id=vote['visual_group_id'])
-                except VisualUserGroup.DoesNotExist:
-                    vote_visual_group = None
+                    vote_role = Role.objects.get(id=vote['role_id'])
+                except Role.DoesNotExist:
+                    vote_role = None
                 try:
                     vote_user = User.objects.get(id=vote['user_id'])
                 except User.DoesNotExist:
                     # missing user id means we skip this vote and can't restore it.
                     continue
                 vote_date = datetime.datetime.fromisoformat(vote['date']) if vote['date'] else None
-                new_vote = Vote(article=article, user=vote_user, date=vote_date, rate=vote['vote'], visual_group=vote_visual_group)
+                new_vote = Vote(article=article, user=vote_user, date=vote_date, rate=vote['vote'], role=vote_role)
                 new_vote.save()
                 new_vote.date = vote_date
                 new_vote.save()
@@ -509,7 +511,7 @@ def refresh_article_links(article_version: ArticleVersion):
     ExternalLink.objects.filter(link_from=article_name).delete()
     # parse current source
     already_added = []
-    rc = RenderContext(article=article_version.article, source_article=article_version.article, path_params={}, user=None)
+    rc = renderer.RenderContext(article=article_version.article, source_article=article_version.article, path_params={}, user=None)
     linked_pages, included_pages = renderer.single_pass_fetch_backlinks(article_version.source, rc)
     for linked_page in linked_pages:
         kt = '%s:include:%s' % (article_name.lower(), linked_page.lower())
@@ -539,8 +541,8 @@ def update_full_name(full_name_or_article: _FullNameOrArticle, new_full_name: st
     article.save()
 
     # update links
-    ExternalLink.objects.filter(link_from__iexact=new_full_name).delete()  # this should not happen, but just to be sure
-    ExternalLink.objects.filter(link_from__iexact=prev_full_name).update(link_from=new_full_name)
+    ExternalLink.objects.filter(link_from=new_full_name).delete()  # this should not happen, but just to be sure
+    ExternalLink.objects.filter(link_from=prev_full_name).update(link_from=new_full_name)
 
     if log:
         log = ArticleLogEntry(
@@ -578,7 +580,7 @@ def _get_article_votes_meta(full_name_or_article: _FullNameOrArticle):
         votes_meta['votes'].append({
             'user_id': vote.user_id,
             'vote': vote.rate,
-            'visual_group_id': vote.visual_group_id,
+            'role_id': vote.role_id,
             'date': vote.date.isoformat() if vote.date else None
         })
     return votes_meta
@@ -617,7 +619,7 @@ def update_title(full_name_or_article: _FullNameOrArticle, new_title: str, user:
 
 def delete_article(full_name_or_article: _FullNameOrArticle):
     article = get_article(full_name_or_article)
-    ExternalLink.objects.filter(link_from__iexact=get_full_name(full_name_or_article)).delete()
+    ExternalLink.objects.filter(link_from=get_full_name(full_name_or_article)).delete()
     media.symlinks_article_delete(article)
     article.delete()
     file_storage = Path(settings.MEDIA_ROOT) / 'media' / article.media_name
@@ -794,14 +796,14 @@ def get_tags(full_name_or_article: _FullNameOrArticle) -> Sequence[str]:
 def get_tags_internal(full_name_or_article: _FullNameOrArticle) -> Sequence[Tag]:
     article = get_article(full_name_or_article)
     if article:
-        return article.tags.prefetch_related("category")
+        return article.tags.select_related('category')
     return []
 
 
 def get_tags_categories(full_name_or_article: _FullNameOrArticle) -> Dict[TagsCategory, Sequence[Tag]]:
     article = get_article(full_name_or_article)
     if article:
-        tags = article.tags.prefetch_related("category").exclude(name__startswith="_")
+        tags = article.tags.select_related('category').exclude(name__startswith="_")
         return dict(sorted({category: list(tags.filter(category=category)) for category in set(TagsCategory.objects.prefetch_related("tag_set").filter(tag__in=tags))}.items(), key=lambda x: x[0].priority if x[0].priority is not None else tags.count()))
     return {}
 
@@ -810,7 +812,7 @@ def get_tags_categories(full_name_or_article: _FullNameOrArticle) -> Dict[TagsCa
 def set_tags(full_name_or_article: _FullNameOrArticle, tags: Sequence[Union[str]], user: Optional[_UserType] = None, log: bool = True):
     article = get_article(full_name_or_article)
 
-    allow_creating = article.get_settings().creating_tags_allowed
+    allow_creating = article.settings.creating_tags_allowed
     tags = list(filter(lambda x: x is not None, [get_tag(x, create=allow_creating) for x in tags if is_tag_name_allowed(x)]))
 
     return set_tags_internal(article, tags, user=user, log=log)
@@ -834,7 +836,7 @@ def set_tags_internal(full_name_or_article: _FullNameOrArticle, tags: Sequence[T
             article.tags.add(tag)
             added_tags.append({'id': tag.id, 'name': tag.full_name})
 
-    if article.get_settings().creating_tags_allowed:
+    if article.settings.creating_tags_allowed:
         # garbage collect tags if anything was removed
         Tag.objects.annotate(num_articles=Count('articles')).filter(num_articles=0).delete()
         TagsCategory.objects.annotate(num_tags=Count('tag')).filter(num_tags=0, slug=F('name')).delete()
@@ -855,7 +857,8 @@ def get_comment_info(full_name_or_article: _FullNameOrArticle) -> tuple[int, int
     article = get_article(full_name_or_article)
     if not article:
         return 0, 0
-    thread, created = ForumThread.objects.get_or_create(article=article)
+    with transaction.atomic():
+        thread, created = ForumThread.objects.get_or_create(article=article)
     if created:
         notifications.subscribe_to_notifications(subscriber=article.author, forum_thread=thread)
     post_count = ForumPost.objects.filter(thread=thread).count()
@@ -867,7 +870,7 @@ def get_rating(full_name_or_article: _FullNameOrArticle) -> tuple[int | float, i
     article = get_article(full_name_or_article)
     if not article:
         return 0, 0, 0, Settings.RatingMode.Disabled
-    obj_settings = article.get_settings()
+    obj_settings = article.settings
     if obj_settings.rating_mode == Settings.RatingMode.UpDown:
         data = article.votes.aggregate(sum=Coalesce(Sum('rate'), 0, output_field=IntegerField()), count=Count('rate'), good=Count('rate', filter=Q(rate=1)))
         return data['sum'] or 0, data['count'] or 0, round((data['good'] or 0) / (data['count'] or 1) * 100), obj_settings.rating_mode
@@ -921,7 +924,7 @@ def add_vote(full_name_or_article: _FullNameOrArticle, user: _UserType, rate: in
 
     new_vote = None
     if rate is not None:
-        new_vote = Vote(article=article, user=user, rate=rate, visual_group=user.visual_group)
+        new_vote = Vote(article=article, user=user, rate=rate, role=user.vote_role)
         new_vote.save()
 
     OnVote(user, article, old_vote, new_vote).emit()
@@ -940,7 +943,7 @@ def get_file_in_article(full_name_or_article: _FullNameOrArticle, file_name: str
     article = get_article(full_name_or_article)
     if article is None:
         return None
-    files = File.objects.filter(article=article, name__iexact=file_name, deleted_at__isnull=True)
+    files = File.objects.filter(article=article, name=file_name, deleted_at__isnull=True)
     if not files:
         return None
     return files[0]
@@ -1065,11 +1068,10 @@ def is_full_name_allowed(article_name: str) -> bool:
 # Fetch multiple articles by names
 def fetch_articles_by_names(original_names):
     names = list(dict.fromkeys([('_default:%s' % x).lower() if ':' not in x else x.lower() for x in original_names]))
-    all_articles = Article.objects.annotate(
-        dumb_name=Lower(Concat('category', Value(':'), 'name', output_field=TextField()))).filter(dumb_name__in=names)
+    all_articles = Article.objects.filter(complete_full_name__in=names)
     ret_map = dict()
     for article in all_articles:
-        ret_map[article.dumb_name] = article
+        ret_map[article.complete_full_name] = article
     articles_dict = dict()
     for name in original_names:
         dumb_name = ('_default:%s' % name).lower() if ':' not in name else name.lower()

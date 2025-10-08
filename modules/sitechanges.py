@@ -4,15 +4,12 @@ import operator
 
 from django.db.models import Q
 
-from modules.forumthread import get_post_contents
 from modules.listpages import render_pagination, render_date
 from renderer import RenderContext, render_template_from_string, render_user_to_html
 import math
 
-import renderer
 from web.models.users import User
 
-from web.controllers import articles
 from web.models.articles import ArticleLogEntry, Article
 from web.models.settings import Settings
 
@@ -21,42 +18,7 @@ def has_content():
     return False
 
 
-def get_post_info(context, posts, category_for_comments):
-    post_contents = get_post_contents(posts)
-    post_info = []
-
-    for post in posts:
-        thread_url = '/forum/t-%d/%s' % (post.thread.id, articles.normalize_article_name(post.thread.name if post.thread.category_id else post.thread.article.display_name))
-        render_post = {
-            'id': post.id,
-            'name': post.name.strip() or 'Перейти к сообщению',
-            'author': render_user_to_html(post.author),
-            'created_at': render_date(post.created_at),
-            'content': renderer.single_pass_render(post_contents.get(post.id, ('', None))[0], RenderContext(None, None, {}, context.user), 'message'),
-            'url': '%s#post-%d' % (thread_url, post.id),
-            'category': {
-                'id': post.thread.category.id,
-                'name': post.thread.category.name,
-                'section_name': post.thread.category.section.name,
-                'url': '/forum/c-%d/%s' % (post.thread.category.id, articles.normalize_article_name(post.thread.category.name))
-            } if post.thread.category_id else {
-                'id': category_for_comments.id,
-                'name': category_for_comments.name,
-                'section_name': category_for_comments.section.name,
-                'url': '/forum/c-%d/%s' % (category_for_comments.id, articles.normalize_article_name(category_for_comments.name))
-            } if category_for_comments else None,
-            'thread': {
-                'id': post.thread.id,
-                'name': post.thread.name,
-                'url': thread_url
-            }
-        }
-        post_info.append(render_post)
-
-    return post_info
-
-
-def log_entry_type_name(entry: ArticleLogEntry.LogEntryType) -> (str, str):
+def log_entry_type_name(entry: ArticleLogEntry.LogEntryType) -> tuple[str, str]:
     mapping = {
         ArticleLogEntry.LogEntryType.Source: ('S', 'изменился текст статьи'),
         ArticleLogEntry.LogEntryType.Title: ('T', 'изменился заголовок'),
@@ -166,7 +128,7 @@ def render(context: RenderContext, params):
             if user_name_search in 'system':
                 new_q |= Q(user__isnull=True)
         else:
-            user_q = list(User.objects.filter(Q(username__iexact=user_name_search)|Q(wikidot_username__iexact=user_name_search)))
+            user_q = list(User.objects.filter(Q(username=user_name_search)|Q(wikidot_username=user_name_search)))
             new_q = Q(user__in=user_q)
             if user_name_search == 'system':
                 new_q |= Q(user__isnull=True)

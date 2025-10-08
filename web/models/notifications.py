@@ -1,3 +1,9 @@
+__all__ = [
+    'UserNotification',
+    'UserNotificationMapping',
+    'UserNotificationSubscription'
+]
+
 import auto_prefetch
 
 from django.db import models
@@ -8,6 +14,7 @@ from web.models.forum import ForumThread
 
 
 User = get_user_model()
+
 
 class UserNotification(auto_prefetch.Model):
     class Meta(auto_prefetch.Model.Meta):
@@ -30,8 +37,8 @@ class UserNotification(auto_prefetch.Model):
 
 
 class UserNotificationMapping(auto_prefetch.Model):
-    recipient = models.ForeignKey(User, on_delete=models.CASCADE, blank=False, null=False)
-    notification = models.ForeignKey(UserNotification, on_delete=models.CASCADE)
+    recipient = auto_prefetch.ForeignKey(User, on_delete=models.CASCADE, blank=False, null=False)
+    notification = auto_prefetch.ForeignKey(UserNotification, on_delete=models.CASCADE)
     is_viewed = models.BooleanField(blank=False, null=False, default=False)
 
 
@@ -40,6 +47,6 @@ class UserNotificationSubscription(auto_prefetch.Model):
         verbose_name = "Подписка на уведомления"
         verbose_name_plural = "Подписки на уведомления"
 
-    subscriber = models.ForeignKey(User, on_delete=models.CASCADE, verbose_name="Подписчик", blank=False, null=False)
+    subscriber = auto_prefetch.ForeignKey(User, on_delete=models.CASCADE, verbose_name="Подписчик", blank=False, null=False)
     article = auto_prefetch.ForeignKey(Article, on_delete=models.CASCADE, verbose_name="Статья", blank=True, null=True)
     forum_thread = auto_prefetch.ForeignKey(ForumThread, on_delete=models.CASCADE, verbose_name="Ветка форума", blank=True, null=True)
